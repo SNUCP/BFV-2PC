@@ -13,8 +13,13 @@ uniform_binary(us::UniformSampler, N::Int64, hw::Int64=0) = begin
         rand(us.rng, [0, 1], N)
     else
         res = zeros(Int64, N)
-        @inbounds for _ = 1:hw
-            res[ceil(Int64, rand(us.rng) * N)] = 1
+        cnt = 0
+        while cnt < hw
+            idx = rand(us.rng, 1:N)
+            if res[idx] == 0
+                res[idx] = 1
+                cnt += 1
+            end
         end
         res
     end
@@ -25,13 +30,19 @@ uniform_ternary(N, hw = h) outputs a uniform ternary Int64 vector with Hamming w
 If hw is not given or set to zero, it outputs a truly uniform ternary vector.
 """
 uniform_ternary(us::UniformSampler, N::Int64, hw::Int64=0) = begin
+    @assert 0 ≤ hw ≤ N "The Hamming weight must be between 0 and N."
+
     if hw == 0
         rand(us.rng, [-1, 0, 1], N)
     else
         res = zeros(Int64, N)
-        tmp = [-1, 1]
-        @inbounds for _ = 1:hw
-            res[ceil(Int64, rand(us.rng) * N)] = rand(us.rng, tmp)
+        cnt = 0
+        while cnt < hw
+            idx = rand(us.rng, 1:N)
+            if res[idx] == 0
+                res[idx] = rand(us.rng, -1:2:1)
+                cnt += 1
+            end
         end
         res
     end
@@ -42,11 +53,54 @@ uniform_random outputs a uniform random distribution.
 """
 uniform_random(us::UniformSampler, N::Int64, Q::Modulus) = rand(us.rng, 0:Q.Q-1, N)
 
+uniform_random(us::UniformSampler, N::Int64, Q::Moduli) = begin
+    res = Vector{Vector{UInt64}}(undef, length(Q))
+    @inbounds for i = eachindex(Q)
+        res[i] = Vector{UInt64}(undef, N)
+        for j = 1:N
+            res[i][j] = rand(us.rng, 0:Q[i].Q-1)
+        end
+    end
+
+    res
+end
+
 uniform_random(us::UniformSampler, Q::Modulus) = rand(us.rng, 0:Q.Q-1)
 
 uniform_random_to!(us::UniformSampler, x::AbstractVector{UInt64}, Q::Modulus) = begin
-    @inbounds for i = eachindex(x)
+    N = length(x)
+    @inbounds for i = 0:8:N-8
+        x[i+1] = rand(us.rng, 0:Q.Q-1)
+        x[i+2] = rand(us.rng, 0:Q.Q-1)
+        x[i+3] = rand(us.rng, 0:Q.Q-1)
+        x[i+4] = rand(us.rng, 0:Q.Q-1)
+        x[i+5] = rand(us.rng, 0:Q.Q-1)
+        x[i+6] = rand(us.rng, 0:Q.Q-1)
+        x[i+7] = rand(us.rng, 0:Q.Q-1)
+        x[i+8] = rand(us.rng, 0:Q.Q-1)
+    end
+    @inbounds for i = 8(N>>3)+1:N
         x[i] = rand(us.rng, 0:Q.Q-1)
+    end
+end
+
+uniform_random_to!(us::UniformSampler, x::AbstractVector{Vector{UInt64}}, Q::Moduli) = begin
+    @assert length(x) == length(Q) "The array size does not match the moduli."
+    @inbounds for i = eachindex(Q)
+        N = length(x[i])
+        for j = 0:8:N-8
+            x[i][j+1] = rand(us.rng, 0:Q[i].Q-1)
+            x[i][j+2] = rand(us.rng, 0:Q[i].Q-1)
+            x[i][j+3] = rand(us.rng, 0:Q[i].Q-1)
+            x[i][j+4] = rand(us.rng, 0:Q[i].Q-1)
+            x[i][j+5] = rand(us.rng, 0:Q[i].Q-1)
+            x[i][j+6] = rand(us.rng, 0:Q[i].Q-1)
+            x[i][j+7] = rand(us.rng, 0:Q[i].Q-1)
+            x[i][j+8] = rand(us.rng, 0:Q[i].Q-1)
+        end
+        for j = 8(N>>3)+1:N
+            x[i][j] = rand(us.rng, 0:Q[i].Q-1)
+        end
     end
 end
 
@@ -66,7 +120,7 @@ struct CDTSampler
     cint::Int64
     cfrac::Float64
 
-    function CDTSampler(center::Float64, sigma::Float64)
+    function CDTSampler(center::Real, sigma::Real)
         normFactor = typemax(UInt64)
         cInt = floor(Int64, center)
         cFrac = center - cInt
@@ -91,59 +145,74 @@ end
 
 sample(s::CDTSampler) = searchsortedlast(s.table, rand(s.rng, UInt64)) + s.cint + s.taillow
 
-const global baselog = 10
-const global sampledepth = 3
-const global hipreclog = baselog * sampledepth
-const global lowpreclog = 53 - hipreclog
+const global cdtbase = 256
 
-struct VarCenSampler
-    basesamplers::Vector{CDTSampler}
+struct TwinCDTSampler
+    rng::ChaChaStream
+    table::Vector{Vector{UInt64}}
+    tail_lo::Int64
+    tail_hi::Int64
+    σ::Float64
 
-    function VarCenSampler(sigma::Float64)
-        bk = 0.0
-        for i = 0:sampledepth-1
-            bk += Float64(1 << baselog)^(-2i)
-        end
-        sigma /= bk
-
-        basesamplers = Vector{CDTSampler}(undef, 1 << baselog)
-        for i = 0:1<<baselog-1
-            c = i / (1 << baselog)
-            basesamplers[i+1] = CDTSampler(c, sigma)
+    function TwinCDTSampler(σ::Real)
+        tables = Vector{Vector{UInt64}}(undef, cdtbase)
+        for i = 0:cdtbase-1
+            tables[i+1] = compute_cdt(i / cdtbase, σ)
         end
 
-        new(basesamplers)
+        tail_hi = ceil(Int64, tailcut * σ)
+        tail_lo = -tail_hi
+
+        new(ChaCha12Stream(), tables, tail_lo, tail_hi, σ)
     end
 end
 
-function sample(s::VarCenSampler, center::Float64)
-    cInt = floor(Int64, center)
-    cFrac = center - cInt
-    cFrac64 = unsafe_trunc(UInt64, cFrac * (1 << 53))
+function compute_cdt(c::Real, σ::Real)
+    tail_hi = ceil(Int64, tailcut * σ)
+    tail_lo = -tail_hi
+    tablesize = tail_hi - tail_lo + 1
 
-    cFrac64Hi = (cFrac64 >> lowpreclog) % Int64
-    r = rand(s.basesamplers[1].rng, UInt64)
-    @inbounds for i = reverse(0:lowpreclog-1)
-        b = (r >> i) & 1
-        cFracBit = (cFrac64 >> i) & 1
-        b > cFracBit && (return sampleC(s, cFrac64Hi) + cInt)
-        b < cFracBit && (return sampleC(s, cFrac64Hi + 1) + cInt)
+    table = Vector{UInt64}(undef, tablesize)
+    cdf = 0.0
+    for i = 0:tablesize-1
+        x = Float64(i + tail_lo)
+        rho = exp(-π * (x - c)^2 / σ^2) / σ
+        cdf += rho
+        if cdf ≥ 1
+            table[i+1] = typemax(UInt64)
+        else
+            table[i+1] = round(UInt64, cdf * typemax(UInt64))
+        end
     end
 
-    sampleC(s, cFrac64Hi + 1) + cInt
+    table
 end
 
-function sampleC(s::VarCenSampler, c::Int64)
-    mask = (1 << baselog) - 1
-    
-    @inbounds for i = 0:sampledepth-1
-        r = sample(s.basesamplers[c&mask+1])
-        (c & mask > 0 && c < 0) && (r -= 1)
-        c >>= baselog
-        c += r
+function sample(centre::Float64, s::TwinCDTSampler)
+    cfloor = floor(centre)
+    c0 = floor(Int64, cdtbase * (centre - cfloor))
+    c1 = ceil(Int64, cdtbase * (centre - cfloor))
+
+    u = rand(s.rng, UInt64)
+    v0 = searchsortedlast(s.table[c0%cdtbase+1], u)
+    v1 = searchsortedlast(s.table[c1%cdtbase+1], u)
+
+    if v0 == v1
+        return unsafe_trunc(Int64, v0 + cfloor + s.tail_lo)
     end
 
-    c
+    cfrac = centre - cfloor
+    cdf = 0.0
+    for x = s.tail_lo:v0
+        xf = Float64(x)
+        cdf += exp(-π * (xf - cfrac)^2 / s.σ^2) / s.σ
+    end
+
+    p = u / typemax(UInt64)
+    if p < cdf
+        return unsafe_trunc(Int64, v0 + cfloor + s.tail_lo)
+    end
+    return unsafe_trunc(Int64, v1 + cfloor + s.tail_lo)
 end
 
 struct RGSampler
@@ -154,13 +223,11 @@ struct RGSampler
         new(ChaCha12Stream(), 3.2)
     end
 
-    function RGSampler(τ::Float64)
+    function RGSampler(τ::Real)
         new(ChaCha12Stream(), τ)
     end
 end
 
 sample(s::RGSampler) = round(Int64, randn(s.rng) * s.τ / √(2π))
 
-sample(s::RGSampler, τ::Float64) = round(Int64, randn(s.rng) * τ / √(2π))
-
-sample128(s::RGSampler, τ::Float64) = round(Int128, randn(s.rng) * τ / √(2π))
+sample(τ::Real, s::RGSampler) = round(Int64, randn(s.rng) * τ / √(2π))

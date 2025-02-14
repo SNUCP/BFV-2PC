@@ -1,127 +1,4 @@
 """
-    find_prime_cyclic(b::Real, m::Int64, n::Int64=1)
-
-Return `n` primes of `b` bits, for cyclic NTT with degree `m`.
-"""
-function find_prime_cyclic(b::Real, m::Int64, n::Int64=1)
-    @assert b ≤ 62 "We do not support primes with bit length bigger than 62-bit"
-
-    primes = Vector{UInt64}(undef, n)
-
-    if is2a3b5c7d(m)
-        initialn = round(UInt64, 2^b / 2m) * 2m + 1
-        currentn = nextprime(initialn, interval=2m)
-
-        cnt = 1
-        while log2(currentn) < 62 && cnt ≤ n
-            primes[cnt] = currentn
-            currentn = nextprime(currentn + 2m, interval=2m)
-            cnt += 1
-        end
-
-        if cnt ≤ n
-            currentn = prevprime(initialn, interval=2m)
-            while cnt ≤ n
-                primes[cnt] = currentn
-                currentn = prevprime(currentn - 2m, interval=2m)
-                cnt += 1
-            end
-        end
-    else
-        factor = next2a3b5c7d(2m - 1)
-        factor2 = iseven(m) ? lcm(factor, 2m) : lcm(factor, m)
-        initialn = round(UInt64, 2^b / factor2) * factor2 + 1
-        currentn = nextprime(initialn, interval=factor2)
-
-        cnt = 1
-        while log2(currentn) < 62 && cnt ≤ n
-            primes[cnt] = currentn
-            currentn = nextprime(currentn + factor2, interval=factor2)
-            cnt += 1
-        end
-
-        if cnt ≤ n
-            currentn = prevprime(initialn, interval=factor2)
-            while cnt ≤ n
-                primes[cnt] = currentn
-                currentn = prevprime(currentn - factor2, interval=factor2)
-                cnt += 1
-            end
-        end
-    end
-
-    Tuple(primes)
-end
-
-"""
-    find_prime_cyclotomic(b::Real, m::Int64, n::Int64=1)
-
-Return `m` primes of `b`-bits, for cyclotomic NTT with degree `m`.
-"""
-function find_prime_cyclotomic(b::Real, m::Int64, n::Int64=1)
-    @assert b ≤ 62 "We do not support primes with bit length bigger than 62-bit"
-
-    primes = Vector{UInt64}(undef, n)
-
-    if ispow2(m)
-        initialn = round(UInt64, 2^b / m) * m + 1
-        currentn = nextprime(initialn, interval=m)
-
-        cnt = 1
-        while log2(currentn) < 62 && cnt ≤ n
-            primes[cnt] = currentn
-            currentn = nextprime(currentn + m, interval=m)
-            cnt += 1
-        end
-
-        if cnt ≤ n
-            currentn = prevprime(initialn, interval=m)
-            while cnt ≤ n
-                primes[cnt] = currentn
-                currentn = prevprime(currentn - m, interval=m)
-                cnt += 1
-            end
-        end
-    else
-        bluestein = next2a3b5c7d(2m - 1)
-
-        N = totient(m)
-        factors = factor(Vector, m)
-        p = filter(isodd, factors)[1]
-        moverp = iseven(m) ? m ÷ 2p : m ÷ p
-        deg = iseven(m) ? m ÷ 2 - moverp : m - moverp
-        if deg == N
-            fact = 2lcm(bluestein, m)
-        else
-            ñ = next2a3b5c7d(m)
-            A = next2a3b5c7d(2(deg - N) + 1)
-            fact = 2lcm(bluestein, m, ñ, A)
-        end
-
-        initialn = round(UInt64, 2^b / fact) * fact + 1
-        currentn = nextprime(initialn, interval=fact)
-
-        cnt = 1
-        while log2(currentn) < 62 && cnt ≤ n
-            primes[cnt] = currentn
-            currentn = nextprime(currentn + fact, interval=fact)
-            cnt += 1
-        end
-
-        if cnt ≤ n
-            currentn = prevprime(initialn, interval=fact)
-            while cnt ≤ n
-                primes[cnt] = currentn
-                currentn = prevprime(currentn - fact, interval=fact)
-                cnt += 1
-            end
-        end
-    end
-
-    Tuple(primes)
-end
-
-"""
     ord(p::Integer, m::Integer)
 
 Returns the multiplicative order of p modulo m.
@@ -129,7 +6,7 @@ Returns the multiplicative order of p modulo m.
 function ord(p::Integer, m::Integer)::Int64
     res = 1
     acc = p % m
-    while acc != 1
+    while acc ≠ 1
         acc = (acc * p) % m
         res += 1
     end
@@ -137,9 +14,14 @@ function ord(p::Integer, m::Integer)::Int64
     res
 end
 
-@inline zeropadto(a::Vector{T}, n::Int64) where {T} = begin
+zeropadto(a::Vector{Int64}, n::Int64) = begin
     @assert n ≥ length(a)
-    vcat(a, zeros(T, n - length(a)))
+    vcat(a, zeros(Int64, n - length(a)))
+end
+
+zeropadto(a::Vector{UInt64}, n::Int64) = begin
+    @assert n ≥ length(a)
+    vcat(a, zeros(UInt64, n - length(a)))
 end
 
 @inline ispow3(n::Int64)::Bool = n == 3^round(Int64, log(n) / log(3))
@@ -192,16 +74,15 @@ const fixed_mask = UInt64(1) << float_prec - 1
 const round_mask = UInt64(1) << (fixed_prec - float_prec) - 1
 
 mult_and_round(a::UInt64, b::UInt128) = a * (b >> float_prec) + ((a * (b & fixed_mask)) >> float_prec)
-
 round_to_uint64(a::UInt128) = round_to_uint128(a) % UInt64
-
 round_to_uint128(a::UInt128) = (a >> (fixed_prec - float_prec) + (a & round_mask) >> (fixed_prec - float_prec - 1))
+round_to_uint128(a::Int128) = unsigned((a >> (fixed_prec - float_prec) + (a & round_mask) >> (fixed_prec - float_prec - 1)))
 
 """
 scramble!(a, r) computes an in-place r-radix reversal algorithm. 
 The length of the input vector should be a power-of-r.
 """
-function scramble!(a::AbstractVector{UInt64}, r::Int64)
+function scramble!(a::AbstractVector{<:Number}, r::Int64)
     if r == 2
         j = 0
         N = length(a)
@@ -217,7 +98,7 @@ function scramble!(a::AbstractVector{UInt64}, r::Int64)
             end
         end
     else
-        logN = floor(Int64, log(length(a)) / log(r))
+        logN = round(Int64, log(length(a)) / log(r))
         N = r^logN
 
         @inbounds for i = 1:N-1
@@ -233,46 +114,86 @@ function scramble!(a::AbstractVector{UInt64}, r::Int64)
     end
 end
 
+Base.:sum(a::AbstractVector{UInt64}, Q::Modulus)::UInt64 = begin
+    res = zero(UInt64)
+    @inbounds for i = eachindex(a)
+        res = _add(res, a[i], Q)
+    end
+    res
+end
+
+Base.:powermod(a::UInt64, p::Integer, Q::Modulus)::UInt64 = begin
+    @assert p ≥ 0
+    p == 0 && return UInt64(1)
+
+    t = prevpow(2, p)
+    r = UInt64(1)
+    while true
+        if p >= t
+            r = _Bmul(r, a, Q)
+            p -= t
+        end
+        t >>>= 1
+        t <= 0 && break
+        r = _Bmul(r, r, Q)
+    end
+    return r
+end
+
 """
 primitive_root_finder(Q) finds the primitive root of Q.
 """
-function primitive_root_finder(Q::Modulus)::UInt64
-    #TODO This code can be improved.
+function primitive_root_finder(Q::Modulus)
+    facts = factor(Dict, Q.Q)
+    Qi = keys(facts) .^ values(facts)
 
-    test = (Q.Q - 1) .÷ collect(keys(factor(Dict, Q.Q - 1)))
+    if length(Qi) == 1
+        N = totient(Q.Q)
+        test = N .÷ collect(keys(factor(Dict, N)))
 
-    one = Mform(1, Q)
-    g = one
-    while true
-        if all(powermod.(g, test, Ref(Q)) .!= one)
-            break
+        g = UInt64(2)
+        while true
+            if powermod(g, N, Q) == 1 && all(powermod.(g, test, Ref(Q)) .≠ 1)
+                break
+            end
+            g += UInt64(1)
         end
-        g += 1
 
-        if g > Q.Q
-            throw("$Q.Q may not be a prime nber.")
+        g
+    else
+        gi = primitive_root_finder.(Qi)
+
+        res = UInt64(0)
+        for i = eachindex(Qi)
+            tildei = Q.Q ÷ Qi[i]
+            invtilde = invmod(tildei, Qi[i])
+
+            res = _add(res, _Bmul(_Bmul(gi[i], invtilde, Q), tildei, Q), Q)
         end
+
+        res
     end
-
-    g
 end
 
-function primitive_root_finder(Q::Int64)::Int64
-    test = (Q - 1) .÷ collect(keys(factor(Dict, Q - 1)))
+primitive_root_finder(Q::Integer)::UInt64 = primitive_root_finder(Modulus(Q))
 
-    g = 2
-    while true
-        if all(powermod.(g, test, Q) .!= 1)
-            break
-        end
-        g += 1
+function ith_root_from_primitive_root(i::Int64, ξ::UInt64, Q::Modulus)
+    facts = factor(Dict, Q.Q)
+    Qiq = collect(keys(facts))
+    Qir = collect(values(facts))
+    Qi = Qiq .^ Qir
 
-        if g > Q
-            throw("$Q may not be a prime nber.")
-        end
+    ζ = UInt64(0)
+    for idx = eachindex(Qi)
+        ξi = ξ % Qi[idx]
+        ζi = powermod(ξi, (Qiq[idx]^Qir[idx] - Qiq[idx]^(Qir[idx] - 1)) ÷ i, Qi[idx])
+        tildei = Q.Q ÷ Qi[idx]
+        invtilde = invmod(tildei, Qi[idx])
+
+        ζ = _add(ζ, _Bmul(_Bmul(ζi, invtilde, Q), tildei, Q), Q)
     end
 
-    g
+    ζ
 end
 
 function find_generators_mod_m(m::Int64)
@@ -309,7 +230,7 @@ function find_generators_mod_m(m::Int64)
 end
 
 """
-division(a, b) performs the long division of poynomials.
+division(a, b) performs the long division of polynomials.
 This function affects the vector a, so be cautious when using.
 """
 function division(a::Vector{Int64}, b::Vector{Int64})::Vector{Int64}
@@ -318,7 +239,7 @@ function division(a::Vector{Int64}, b::Vector{Int64})::Vector{Int64}
     Q = zeros(Int64, length(a) - length(b) + 1)
 
     @inbounds for i = 0:length(a)-length(b)
-        if a[end-i] != 0
+        if a[end-i] ≠ 0
             Q[end-i] = a[end-i] ÷ b[end]
 
             @simd for j = 0:length(b)-1
@@ -331,9 +252,32 @@ function division(a::Vector{Int64}, b::Vector{Int64})::Vector{Int64}
 end
 
 """
+division(a, b) performs the long division of polynomials.
+This function affects the vector a, so be cautious when using.
+"""
+function division_mod_Q(a::Vector{UInt64}, b::Vector{UInt64}, Q::Modulus)
+    @assert length(a) ≥ length(b) "The size of the input polynomials do not match."
+    @assert gcd(b[end], Q.Q) == 1 "The leading coefficient of b should be coprime with Q."
+
+    q = zeros(UInt64, length(a) - length(b) + 1)
+
+    @inbounds for i = 0:length(a)-length(b)
+        if a[end-i] ≠ 0
+            q[end-i] = _Bmul(a[end-i], invmod(b[end], Q.Q), Q)
+
+            @simd for j = 0:length(b)-1
+                a[end-i-j] = _neg(_Bred(widemul(b[end-j], q[end-i]) + Q.Q - a[end-i-j], Q), Q)
+            end
+        end
+    end
+
+    q
+end
+
+"""
 cyclotomic_finder(m) returns the m-th cyclotomic polynomial. 
 """
-function cyclotomic_finder(m::Int64)::Vector{Int64}
+function cyclotomic_finder(m::Int64)
     # Find the factors of m. Sorting is necessary to enhance the efficiency.
     factors = factor(Dict, m)
     primes = collect(keys(factors))
@@ -346,7 +290,7 @@ function cyclotomic_finder(m::Int64)::Vector{Int64}
         is2divm = false
     end
 
-    # Make lazy_Mmul arrays for less allocations.
+    # Make arrays for less allocations.
     ϕm = zeros(Int64, m + 1)
     ϕm[1] = -1
     ϕm[2] = 1
@@ -368,7 +312,7 @@ function cyclotomic_finder(m::Int64)::Vector{Int64}
         ηprime = ηtimesp - η
 
         for i = 0:(p-1)*η
-            if tmp2[ηtimesp+1-i] != 0
+            if tmp2[ηtimesp+1-i] ≠ 0
                 ϕm[ηprime+1-i] = tmp2[ηtimesp+1-i] ÷ tmp[η+1]
 
                 @simd for j = 0:η
@@ -400,4 +344,28 @@ function cyclotomic_finder(m::Int64)::Vector{Int64}
 
     resize!(ϕm, totient(m) + 1)
     ϕm
+end
+
+function gen_power_modmul(gen::Vector{Int64}, dims::Vector{Int64}, idx::NTuple{N,Int64}, m::Int64) where {N}
+    if N == 1
+        idx1 = powermod(gen[1], idx[1] % dims[1], m)
+        res = idx1
+    elseif N == 2
+        idx1 = powermod(gen[1], idx[1] % dims[1], m)
+        idx2 = powermod(gen[2], idx[2] % dims[2], m)
+        res = (idx1 * idx2) % m
+    elseif N == 3
+        idx1 = powermod(gen[1], idx[1] % dims[1], m)
+        idx2 = powermod(gen[2], idx[2] % dims[2], m)
+        idx3 = powermod(gen[3], idx[3] % dims[3], m)
+        res = (((idx1 * idx2) % m) * idx3) % m
+    else
+        idx1 = powermod(gen[1], idx[1] % dims[1], m)
+        idx2 = powermod(gen[2], idx[2] % dims[2], m)
+        idx3 = powermod(gen[3], idx[3] % dims[3], m)
+        idx4 = powermod(gen[4], idx[4] % dims[4], m)
+        res = (((((idx1 * idx2) % m) * idx3) % m) * idx4) % m
+    end
+
+    res
 end

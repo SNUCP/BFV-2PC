@@ -11,26 +11,26 @@ Outputs secret key for RLWE.
 If hw = 0, the secret is sampled from a uniform binary distribution.
 Otherwise, it outputs a secret key with hamming weight at most hw. 
 """
-binary_ringkey(us::UniformSampler, N::Int64, hw::Int64 = 0) = RLWEkey(uniform_binary(us, N, hw), N)
+binary_ringkey(us::UniformSampler, N::Int64, hw::Int64=0) = RLWEkey(uniform_binary(us, N, hw), N)
 
 """
 Outputs secret key for RLWE.
 If hw = 0, the secret is sampled from a uniform ternary distribution.
 Otherwise, it outputs a secret key with hamming weight at most hw. 
 """
-ternary_ringkey(us::UniformSampler, N::Int64, hw::Int64 = 0) = RLWEkey(uniform_ternary(us, N, hw), N)
+ternary_ringkey(us::UniformSampler, N::Int64, hw::Int64=0) = RLWEkey(uniform_ternary(us, N, hw), N)
 
 """
-RLWEkeyQ is a struct for the embedding of the RLWE secret key s ∈ Rₚ.
+RLWEkeyPQ is a struct for the embedding of the RLWE secret key s ∈ R_Q.
 """
-const RLWEkeyQ = ModPoly
+const RLWEkeyPQ = ModPoly
 
-RLWEkeyQ(key::RLWEkey, moduli::Moduli) = begin
-    coeffs = Array{UInt64, 2}(undef, key.N, length(moduli))
-    for j = eachindex(moduli)
-        @simd for i = 1 : key.N
-            coeffs[i, j] = key.coeffs[i] ≥ 0 ? key.coeffs[i] : key.coeffs[i] + moduli[j].Q
+RLWEkeyPQ(key::RLWEkey, eval::PolyEvaluator) = begin
+    coeffs = [Vector{UInt64}(undef, key.N) for _ = eachindex(eval)]
+    @inbounds for i = eachindex(eval)
+        for j = 1:key.N
+            coeffs[i][j] = _Bred(key.coeffs[j], eval[i].Q)
         end
     end
-    ModPoly(coeffs, false, false)
+    ModPoly(coeffs, false)
 end

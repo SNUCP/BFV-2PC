@@ -11,6 +11,8 @@ struct Modulus
     halfQ::Int64      # Used for balanced representation.
 
     function Modulus(Q::Integer)
+        Q == 0 && return new(0, 0, 0, 0, 0, 0, 0)
+
         logQ = ceil(Int64, log2(Q))
         @assert logQ ≤ 62 "Modulus should be smaller than 2⁶²."
 
@@ -29,25 +31,28 @@ struct Modulus
     end
 end
 
+Base.:show(io::IO, Q::Modulus) = print(io, Q.Q)
+Base.:show(io::IO, mime::MIME"text/plain", Q::Modulus) = println(io, Q.Q)
+
 """
-Bred(x, Q) returns x % Q using barret reduction.
+_Bred(x, Q) returns x % Q using barret reduction.
 """
-Bred(x::UInt64, Q::Modulus)::UInt64 = begin
+_Bred(x::UInt64, Q::Modulus)::UInt64 = begin
     t = (widemul(Q.r1, x) >> 64) % UInt64
     res = x - Q.Q * t
     res ≥ Q.Q ? res - Q.Q : res
 end
 
-Bred(x::Int64, Q::Modulus)::UInt64 = begin
+_Bred(x::Int64, Q::Modulus)::UInt64 = begin
     if x ≥ 0
-        return Bred(UInt64(x), Q)
+        return _Bred(UInt64(x), Q)
     else
-        res = Bred(UInt64(-x), Q)
+        res = _Bred(UInt64(-x), Q)
         return res > 0 ? Q.Q - res : res
     end
 end
 
-Bred(x::UInt128, Q::Modulus)::UInt64 = begin
+_Bred(x::UInt128, Q::Modulus)::UInt64 = begin
     x0 = x % UInt64
     x1 = (x >> 64) % UInt64
     t = (widemul(Q.r1, x1) + (widemul(Q.r1, x0) + widemul(Q.r0, x1) + widemul(Q.r0, x0) >> 64) >> 64) % UInt64
@@ -55,59 +60,121 @@ Bred(x::UInt128, Q::Modulus)::UInt64 = begin
     res ≥ Q.Q ? res - Q.Q : res
 end
 
-Bred(x::Int128, Q::Modulus)::UInt64 = begin
+_Bred(x::Int128, Q::Modulus)::UInt64 = begin
     if x ≥ 0
-        return Bred(UInt128(x), Q)
+        return _Bred(UInt128(x), Q)
     else
-        res = Bred(UInt128(-x), Q)
+        res = _Bred(UInt128(-x), Q)
         return res > 0 ? Q.Q - res : res
     end
 end
 
-lazy_Bred(x::UInt64, Q::Modulus)::UInt64 = begin
+_lazy_Bred(x::UInt64, Q::Modulus)::UInt64 = begin
     t = (widemul(Q.r1, x) >> 64) % UInt64
     x - Q.Q * t
 end
 
-lazy_Bred(x::UInt128, Q::Modulus)::UInt64 = begin
+_lazy_Bred(x::Int64, Q::Modulus)::UInt64 = begin
+    if x ≥ 0
+        return _lazy_Bred(UInt64(x), Q)
+    else
+        res = _lazy_Bred(UInt64(-x), Q)
+        return res > 0 ? Q.Q - res : res
+    end
+end
+
+_lazy_Bred(x::UInt128, Q::Modulus)::UInt64 = begin
     x0 = x % UInt64
     x1 = (x >> 64) % UInt64
     t = (widemul(Q.r1, x1) + (widemul(Q.r1, x0) + widemul(Q.r0, x1) + widemul(Q.r0, x0) >> 64) >> 64) % UInt64
     x0 - t * Q.Q
 end
 
+_lazy_Bred(x::Int128, Q::Modulus)::UInt64 = begin
+    if x ≥ 0
+        return _lazy_Bred(UInt128(x), Q)
+    else
+        res = _lazy_Bred(UInt128(-x), Q)
+        return res > 0 ? Q.Q - res : res
+    end
+end
+
+_Bred!(a::AbstractVector{UInt64}, Q::Modulus) = _Bred_to!(a, a, Q)
+
+_Bred_to!(res::AbstractVector{UInt64}, a::AbstractVector{<:Union{Int64,UInt64,Int128,UInt128}}, Q::Modulus) = begin
+    @assert length(res) == length(a) "Length of res and a should be the same."
+    N = length(a)
+    @inbounds for i = 0:8:N-8
+        res[i+1] = _Bred(a[i+1], Q)
+        res[i+2] = _Bred(a[i+2], Q)
+        res[i+3] = _Bred(a[i+3], Q)
+        res[i+4] = _Bred(a[i+4], Q)
+        res[i+5] = _Bred(a[i+5], Q)
+        res[i+6] = _Bred(a[i+6], Q)
+        res[i+7] = _Bred(a[i+7], Q)
+        res[i+8] = _Bred(a[i+8], Q)
+    end
+    @inbounds for i = 8(N>>3)+1:N
+        res[i] = _Bred(a[i], Q)
+    end
+end
+
 # Taken from the invmod.
 Base.:invmod(x::Integer, Q::Modulus)::UInt64 = begin
     n, m = UInt64(x), Q.Q
     g, x, _ = gcdx(n, m)
-    g != 1 && throw(DomainError((n, m), LazyString("Greatest common divisor is ", g, ".")))
+    g ≠ 1 && throw(DomainError((n, m), LazyString("Greatest common divisor is ", g, ".")))
     x > typemax(UInt64) >> 1 && (x += m)
-    Bred(x, Q)
+    _Bred(x, Q)
 end
 
-Mform(x::UInt64, Q::Modulus)::UInt64 = begin
+_Mform(x::UInt64, Q::Modulus)::UInt64 = begin
     t = (widemul(Q.r1, x) + widemul(Q.r0, x) >> 64) % UInt64
     res = -t * Q.Q
     res ≥ Q.Q ? res - Q.Q : res
 end
 
-Mform(x::Int64, Q::Modulus)::UInt64 = Mform(Bred(x, Q), Q)
+_Mform(x::Int64, Q::Modulus)::UInt64 = _Mform(Bred(x, Q), Q)
 
-iMform(x::UInt64, Q::Modulus)::UInt64 = Bred(widemul(x, Q.R⁻¹), Q)
+_iMform(x::UInt64, Q::Modulus)::UInt64 = _Bred(widemul(x, Q.R⁻¹), Q)
 
-Mform!(x::AbstractVector{UInt64}, Q::Modulus) = Mform_to!(x, x, Q)
+_Mform!(x::AbstractVector{UInt64}, Q::Modulus) = _Mform_to!(x, x, Q)
 
-Mform_to!(res::AbstractVector{UInt64}, x::AbstractVector{UInt64}, Q::Modulus) = begin
-    @inbounds for i = eachindex(x)
-        res[i] = Mform(x[i], Q)
+_Mform_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, Q::Modulus) = begin
+    @assert length(res) == length(a) "Length of res and a should be the same."
+    N = length(a)
+    @inbounds for i = 0:8:N-8
+        res[i+1] = _Mform(a[i+1], Q)
+        res[i+2] = _Mform(a[i+2], Q)
+        res[i+3] = _Mform(a[i+3], Q)
+        res[i+4] = _Mform(a[i+4], Q)
+        res[i+5] = _Mform(a[i+5], Q)
+        res[i+6] = _Mform(a[i+6], Q)
+        res[i+7] = _Mform(a[i+7], Q)
+        res[i+8] = _Mform(a[i+8], Q)
+    end
+    @inbounds for i = 8(N>>3)+1:N
+        res[i] = _Mform(a[i], Q)
     end
 end
 
-iMform!(x::AbstractVector{UInt64}, Q::Modulus) = iMform_to!(x, x, Q)
+_iMform!(x::AbstractVector{UInt64}, Q::Modulus) = _iMform_to!(x, x, Q)
 
-iMform_to!(res::AbstractVector{UInt64}, x::AbstractVector{UInt64}, Q::Modulus) = begin
-    @inbounds for i = eachindex(x)
-        res[i] = iMform(x[i], Q)
+_iMform_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, Q::Modulus) = begin
+    @assert length(res) == length(a) "Length of res and a should be the same."
+    N = length(a)
+    @inbounds for i = 0:8:N-8
+        res[i+1] = _iMform(a[i+1], Q)
+        res[i+2] = _iMform(a[i+2], Q)
+        res[i+3] = _iMform(a[i+3], Q)
+        res[i+4] = _iMform(a[i+4], Q)
+        res[i+5] = _iMform(a[i+5], Q)
+        res[i+6] = _iMform(a[i+6], Q)
+        res[i+7] = _iMform(a[i+7], Q)
+        res[i+8] = _iMform(a[i+8], Q)
+    end
+    @inbounds for i = 8(N>>3)+1:N
+        res[i] = _iMform(a[i], Q)
     end
 end
 
@@ -116,58 +183,109 @@ Convert UInt64 to a balanced representation.
 """
 Base.:signed(x::UInt64, Q::Modulus)::Int64 = signed(x > Q.halfQ ? x - Q.Q : x)
 
-"""
-Convert (x mod P) mod Q in balanced representation.
-"""
-embed_to!(res::AbstractVector{UInt64}, x::AbstractVector{UInt64}, P::Modulus, Q::Modulus) = begin
-    @inbounds for i = eachindex(x)
-        res[i] = Bred(signed(x[i], P), Q)
-    end
-end
-
-add(a::UInt64, b::UInt64, Q::Modulus)::UInt64 = begin
+_add(a::UInt64, b::UInt64, Q::Modulus)::UInt64 = begin
     res = a + b
     res ≥ Q.Q ? res - Q.Q : res
 end
 
-add_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, b::AbstractVector{UInt64}, Q::Modulus) = begin
-    @inbounds for i = eachindex(a)
-        res[i] = add(a[i], b[i], Q)
+_add_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, b::AbstractVector{UInt64}, Q::Modulus) = begin
+    @assert length(res) == length(a) == length(b) "Length of res and a should be the same."
+    N = length(a)
+    @inbounds for i = 0:8:N-8
+        res[i+1] = _add(a[i+1], b[i+1], Q)
+        res[i+2] = _add(a[i+2], b[i+2], Q)
+        res[i+3] = _add(a[i+3], b[i+3], Q)
+        res[i+4] = _add(a[i+4], b[i+4], Q)
+        res[i+5] = _add(a[i+5], b[i+5], Q)
+        res[i+6] = _add(a[i+6], b[i+6], Q)
+        res[i+7] = _add(a[i+7], b[i+7], Q)
+        res[i+8] = _add(a[i+8], b[i+8], Q)
+    end
+    @inbounds for i = 8(N>>3)+1:N
+        res[i] = _add(a[i], b[i], Q)
     end
 end
 
-add_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, b::UInt64, Q::Modulus) = begin
-    @inbounds for i = eachindex(a)
-        res[i] = add(a[i], b, Q)
+_add_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, b::UInt64, Q::Modulus) = begin
+    @assert length(res) == length(a) "Length of res and a should be the same."
+    N = length(a)
+    @inbounds for i = 0:8:N-8
+        res[i+1] = _add(a[i+1], b, Q)
+        res[i+2] = _add(a[i+2], b, Q)
+        res[i+3] = _add(a[i+3], b, Q)
+        res[i+4] = _add(a[i+4], b, Q)
+        res[i+5] = _add(a[i+5], b, Q)
+        res[i+6] = _add(a[i+6], b, Q)
+        res[i+7] = _add(a[i+7], b, Q)
+        res[i+8] = _add(a[i+8], b, Q)
+    end
+    @inbounds for i = 8(N>>3)+1:N
+        res[i] = _add(a[i], b, Q)
     end
 end
 
-neg(a::UInt64, Q::Modulus)::UInt64 = a == 0 ? a : Q.Q - a
+_neg(a::UInt64, Q::Modulus)::UInt64 = a == 0 ? a : Q.Q - a
 
-neg_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, Q::Modulus) = begin
-    @inbounds for i = eachindex(a)
-        res[i] = neg(a[i], Q)
+_neg_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, Q::Modulus) = begin
+    @assert length(res) == length(a) "Length of res and a should be the same."
+    N = length(a)
+    @inbounds for i = 0:8:N-8
+        res[i+1] = _neg(a[i+1], Q)
+        res[i+2] = _neg(a[i+2], Q)
+        res[i+3] = _neg(a[i+3], Q)
+        res[i+4] = _neg(a[i+4], Q)
+        res[i+5] = _neg(a[i+5], Q)
+        res[i+6] = _neg(a[i+6], Q)
+        res[i+7] = _neg(a[i+7], Q)
+        res[i+8] = _neg(a[i+8], Q)
+    end
+    @inbounds for i = 8(N>>3)+1:N
+        res[i] = _neg(a[i], Q)
     end
 end
 
-sub(a::UInt64, b::UInt64, Q::Modulus)::UInt64 = begin
+_sub(a::UInt64, b::UInt64, Q::Modulus)::UInt64 = begin
     res = a - b
     res ≥ Q.Q ? res + Q.Q : res
 end
 
-sub_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, b::AbstractVector{UInt64}, Q::Modulus) = begin
-    @inbounds for i = eachindex(a)
-        res[i] = sub(a[i], b[i], Q)
+_sub_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, b::AbstractVector{UInt64}, Q::Modulus) = begin
+    @assert length(res) == length(a) == length(b) "Length of res and a should be the same."
+    N = length(a)
+    @inbounds for i = 0:8:N-8
+        res[i+1] = _sub(a[i+1], b[i+1], Q)
+        res[i+2] = _sub(a[i+2], b[i+2], Q)
+        res[i+3] = _sub(a[i+3], b[i+3], Q)
+        res[i+4] = _sub(a[i+4], b[i+4], Q)
+        res[i+5] = _sub(a[i+5], b[i+5], Q)
+        res[i+6] = _sub(a[i+6], b[i+6], Q)
+        res[i+7] = _sub(a[i+7], b[i+7], Q)
+        res[i+8] = _sub(a[i+8], b[i+8], Q)
+    end
+    @inbounds for i = 8(N>>3)+1:N
+        res[i] = _sub(a[i], b[i], Q)
     end
 end
 
-sub_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, b::UInt64, Q::Modulus) = begin
-    @inbounds for i = eachindex(a)
-        res[i] = sub(a[i], b, Q)
+_sub_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, b::UInt64, Q::Modulus) = begin
+    @assert length(res) == length(a) "Length of res and a should be the same."
+    N = length(a)
+    @inbounds for i = 0:8:N-8
+        res[i+1] = _sub(a[i+1], b, Q)
+        res[i+2] = _sub(a[i+2], b, Q)
+        res[i+3] = _sub(a[i+3], b, Q)
+        res[i+4] = _sub(a[i+4], b, Q)
+        res[i+5] = _sub(a[i+5], b, Q)
+        res[i+6] = _sub(a[i+6], b, Q)
+        res[i+7] = _sub(a[i+7], b, Q)
+        res[i+8] = _sub(a[i+8], b, Q)
+    end
+    @inbounds for i = 8(N>>3)+1:N
+        res[i] = _sub(a[i], b, Q)
     end
 end
 
-Mmul(a::UInt64, b::UInt64, Q::Modulus)::UInt64 = begin
+_Mmul(a::UInt64, b::UInt64, Q::Modulus)::UInt64 = begin
     q, q⁻¹ = Q.Q, Q.Q⁻¹
 
     ab = widemul(a, b)
@@ -175,115 +293,212 @@ Mmul(a::UInt64, b::UInt64, Q::Modulus)::UInt64 = begin
     w ≥ q ? w - q : w
 end
 
-lazy_Mmul(a::UInt64, b::UInt64, Q::Modulus)::UInt64 = begin
+_lazy_Mmul(a::UInt64, b::UInt64, Q::Modulus)::UInt64 = begin
     q, q⁻¹ = Q.Q, Q.Q⁻¹
 
     ab = widemul(a, b)
     ((widemul(q, (ab % UInt64) * q⁻¹) + ab) >> 64) % UInt64
 end
 
-Bmul(a::UInt64, b::UInt64, Q::Modulus)::UInt64 = Bred(widemul(a, b), Q)
+_Bmul(a::UInt64, b::UInt64, Q::Modulus)::UInt64 = _Bred(widemul(a, b), Q)
 
-lazy_Bmul(a::UInt64, b::UInt64, Q::Modulus)::UInt64 = lazy_Bred(widemul(a, b), Q)
+_lazy_Bmul(a::UInt64, b::UInt64, Q::Modulus)::UInt64 = _lazy_Bred(widemul(a, b), Q)
 
-Mmul_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, b::AbstractVector{UInt64}, Q::Modulus) = begin
-    @inbounds for i = eachindex(a)
-        res[i] = Mmul(a[i], b[i], Q)
+_Mmul_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, b::AbstractVector{UInt64}, Q::Modulus) = begin
+    @assert length(res) == length(a) == length(b) "Length of res and a should be the same."
+    N = length(a)
+    @inbounds for i = 0:8:N-8
+        res[i+1] = _Mmul(a[i+1], b[i+1], Q)
+        res[i+2] = _Mmul(a[i+2], b[i+2], Q)
+        res[i+3] = _Mmul(a[i+3], b[i+3], Q)
+        res[i+4] = _Mmul(a[i+4], b[i+4], Q)
+        res[i+5] = _Mmul(a[i+5], b[i+5], Q)
+        res[i+6] = _Mmul(a[i+6], b[i+6], Q)
+        res[i+7] = _Mmul(a[i+7], b[i+7], Q)
+        res[i+8] = _Mmul(a[i+8], b[i+8], Q)
+    end
+    @inbounds for i = 8(N>>3)+1:N
+        res[i] = _Mmul(a[i], b[i], Q)
     end
 end
 
-Mmul_to!(res::AbstractVector{UInt64}, a::UInt64, b::AbstractVector{UInt64}, Q::Modulus) = begin
-    @inbounds for i = eachindex(b)
-        res[i] = Mmul(a, b[i], Q)
+_Mmul_to!(res::AbstractVector{UInt64}, a::UInt64, b::AbstractVector{UInt64}, Q::Modulus) = begin
+    @assert length(res) == length(b) "Length of res and a should be the same."
+    N = length(b)
+    @inbounds for i = 0:8:N-8
+        res[i+1] = _Mmul(a, b[i+1], Q)
+        res[i+2] = _Mmul(a, b[i+2], Q)
+        res[i+3] = _Mmul(a, b[i+3], Q)
+        res[i+4] = _Mmul(a, b[i+4], Q)
+        res[i+5] = _Mmul(a, b[i+5], Q)
+        res[i+6] = _Mmul(a, b[i+6], Q)
+        res[i+7] = _Mmul(a, b[i+7], Q)
+        res[i+8] = _Mmul(a, b[i+8], Q)
+    end
+    @inbounds for i = 8(N>>3)+1:N
+        res[i] = _Mmul(a, b[i], Q)
     end
 end
 
-Bmul_to!(res::AbstractVector{UInt64}, a::UInt64, b::AbstractVector{UInt64}, Q::Modulus) = begin
-    @inbounds for i = eachindex(b)
-        res[i] = Bmul(a, b[i], Q)
+_Bmul_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, b::AbstractVector{UInt64}, Q::Modulus) = begin
+    @assert length(res) == length(a) == length(b) "Length of res and a should be the same."
+    N = length(a)
+    @inbounds for i = 0:8:N-8
+        res[i+1] = _Bmul(a[i+1], b[i+1], Q)
+        res[i+2] = _Bmul(a[i+2], b[i+2], Q)
+        res[i+3] = _Bmul(a[i+3], b[i+3], Q)
+        res[i+4] = _Bmul(a[i+4], b[i+4], Q)
+        res[i+5] = _Bmul(a[i+5], b[i+5], Q)
+        res[i+6] = _Bmul(a[i+6], b[i+6], Q)
+        res[i+7] = _Bmul(a[i+7], b[i+7], Q)
+        res[i+8] = _Bmul(a[i+8], b[i+8], Q)
+    end
+    @inbounds for i = 8(N>>3)+1:N
+        res[i] = _Bmul(a[i], b[i], Q)
     end
 end
 
-Mmuladd_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, b::AbstractVector{UInt64}, Q::Modulus) = begin
-    @inbounds for i = eachindex(a)
-        res[i] = add(res[i], Mmul(a[i], b[i], Q), Q)
+_Bmul_to!(res::AbstractVector{UInt64}, a::UInt64, b::AbstractVector{UInt64}, Q::Modulus) = begin
+    @assert length(res) == length(b) "Length of res and a should be the same."
+    N = length(b)
+    @inbounds for i = 0:8:N-8
+        res[i+1] = _Bmul(a, b[i+1], Q)
+        res[i+2] = _Bmul(a, b[i+2], Q)
+        res[i+3] = _Bmul(a, b[i+3], Q)
+        res[i+4] = _Bmul(a, b[i+4], Q)
+        res[i+5] = _Bmul(a, b[i+5], Q)
+        res[i+6] = _Bmul(a, b[i+6], Q)
+        res[i+7] = _Bmul(a, b[i+7], Q)
+        res[i+8] = _Bmul(a, b[i+8], Q)
+    end
+    @inbounds for i = 8(N>>3)+1:N
+        res[i] = _Bmul(a, b[i], Q)
     end
 end
 
-Mmuladd_to!(res::AbstractVector{UInt64}, a::UInt64, b::AbstractVector{UInt64}, Q::Modulus) = begin
-    @inbounds for i = eachindex(b)
-        res[i] = add(res[i], Mmul(a, b[i], Q), Q)
+_lazy_Bmul_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, b::AbstractVector{UInt64}, Q::Modulus) = begin
+    @assert length(res) == length(a) == length(b) "Length of res and a should be the same."
+    N = length(a)
+    @inbounds for i = 0:8:N-8
+        res[i+1] = _lazy_Bmul(a[i+1], b[i+1], Q)
+        res[i+2] = _lazy_Bmul(a[i+2], b[i+2], Q)
+        res[i+3] = _lazy_Bmul(a[i+3], b[i+3], Q)
+        res[i+4] = _lazy_Bmul(a[i+4], b[i+4], Q)
+        res[i+5] = _lazy_Bmul(a[i+5], b[i+5], Q)
+        res[i+6] = _lazy_Bmul(a[i+6], b[i+6], Q)
+        res[i+7] = _lazy_Bmul(a[i+7], b[i+7], Q)
+        res[i+8] = _lazy_Bmul(a[i+8], b[i+8], Q)
+    end
+    @inbounds for i = 8(N>>3)+1:N
+        res[i] = _lazy_Bmul(a[i], b[i], Q)
     end
 end
 
-Bmuladd_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, b::AbstractVector{UInt64}, Q::Modulus) = begin
-    @inbounds for i = eachindex(b)
-        res[i] = Bred(widemul(a[i], b[i]) + res[i], Q)
+_lazy_Bmul_to!(res::AbstractVector{UInt64}, a::UInt64, b::AbstractVector{UInt64}, Q::Modulus) = begin
+    @assert length(res) == length(b) "Length of res and a should be the same."
+    N = length(b)
+    @inbounds for i = 0:8:N-8
+        res[i+1] = _lazy_Bmul(a, b[i+1], Q)
+        res[i+2] = _lazy_Bmul(a, b[i+2], Q)
+        res[i+3] = _lazy_Bmul(a, b[i+3], Q)
+        res[i+4] = _lazy_Bmul(a, b[i+4], Q)
+        res[i+5] = _lazy_Bmul(a, b[i+5], Q)
+        res[i+6] = _lazy_Bmul(a, b[i+6], Q)
+        res[i+7] = _lazy_Bmul(a, b[i+7], Q)
+        res[i+8] = _lazy_Bmul(a, b[i+8], Q)
+    end
+    @inbounds for i = 8(N>>3)+1:N
+        res[i] = _lazy_Bmul(a, b[i], Q)
     end
 end
 
-Bmuladd_to!(res::AbstractVector{UInt64}, a::UInt64, b::AbstractVector{UInt64}, Q::Modulus) = begin
-    @inbounds for i = eachindex(b)
-        res[i] = Bred(widemul(a, b[i]) + res[i], Q)
+_Bmuladd_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, b::AbstractVector{UInt64}, Q::Modulus) = begin
+    @assert length(res) == length(a) == length(b) "Length of res and a should be the same."
+    N = length(a)
+    @inbounds for i = 0:8:N-8
+        res[i+1] = _Bred(widemul(a[i+1], b[i+1]) + res[i+1], Q)
+        res[i+2] = _Bred(widemul(a[i+2], b[i+2]) + res[i+2], Q)
+        res[i+3] = _Bred(widemul(a[i+3], b[i+3]) + res[i+3], Q)
+        res[i+4] = _Bred(widemul(a[i+4], b[i+4]) + res[i+4], Q)
+        res[i+5] = _Bred(widemul(a[i+5], b[i+5]) + res[i+5], Q)
+        res[i+6] = _Bred(widemul(a[i+6], b[i+6]) + res[i+6], Q)
+        res[i+7] = _Bred(widemul(a[i+7], b[i+7]) + res[i+7], Q)
+        res[i+8] = _Bred(widemul(a[i+8], b[i+8]) + res[i+8], Q)
+    end
+    @inbounds for i = 8(N>>3)+1:N
+        res[i] = _Bred(widemul(a[i], b[i]) + res[i], Q)
     end
 end
 
-Mmulsub_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, b::AbstractVector{UInt64}, Q::Modulus) = begin
-    @inbounds for i = eachindex(a)
-        res[i] = sub(res[i], Mmul(a[i], b[i], Q), Q)
+_Bmuladd_to!(res::AbstractVector{UInt64}, a::UInt64, b::AbstractVector{UInt64}, Q::Modulus) = begin
+    @assert length(res) == length(b) "Length of res and a should be the same."
+    N = length(b)
+    @inbounds for i = 0:8:N-8
+        res[i+1] = _Bred(widemul(a, b[i+1]) + res[i+1], Q)
+        res[i+2] = _Bred(widemul(a, b[i+2]) + res[i+2], Q)
+        res[i+3] = _Bred(widemul(a, b[i+3]) + res[i+3], Q)
+        res[i+4] = _Bred(widemul(a, b[i+4]) + res[i+4], Q)
+        res[i+5] = _Bred(widemul(a, b[i+5]) + res[i+5], Q)
+        res[i+6] = _Bred(widemul(a, b[i+6]) + res[i+6], Q)
+        res[i+7] = _Bred(widemul(a, b[i+7]) + res[i+7], Q)
+        res[i+8] = _Bred(widemul(a, b[i+8]) + res[i+8], Q)
+    end
+    @inbounds for i = 8(N>>3)+1:N
+        res[i] = _Bred(widemul(a, b[i]) + res[i], Q)
     end
 end
 
-Mmulsub_to!(res::AbstractVector{UInt64}, a::UInt64, b::AbstractVector{UInt64}, Q::Modulus) = begin
-    @inbounds for i = eachindex(b)
-        res[i] = sub(res[i], Mmul(a, b[i], Q), Q)
+_Bmulsub_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, b::AbstractVector{UInt64}, Q::Modulus) = begin
+    @assert length(res) == length(a) == length(b) "Length of res and a should be the same."
+    N = length(a)
+    @inbounds for i = 0:8:N-8
+        res[i+1] = _Bred(widemul(Q.Q - a[i+1], b[i+1]) + res[i+1], Q)
+        res[i+2] = _Bred(widemul(Q.Q - a[i+2], b[i+2]) + res[i+2], Q)
+        res[i+3] = _Bred(widemul(Q.Q - a[i+3], b[i+3]) + res[i+3], Q)
+        res[i+4] = _Bred(widemul(Q.Q - a[i+4], b[i+4]) + res[i+4], Q)
+        res[i+5] = _Bred(widemul(Q.Q - a[i+5], b[i+5]) + res[i+5], Q)
+        res[i+6] = _Bred(widemul(Q.Q - a[i+6], b[i+6]) + res[i+6], Q)
+        res[i+7] = _Bred(widemul(Q.Q - a[i+7], b[i+7]) + res[i+7], Q)
+        res[i+8] = _Bred(widemul(Q.Q - a[i+8], b[i+8]) + res[i+8], Q)
+    end
+    @inbounds for i = 8(N>>3)+1:N
+        res[i] = _Bred(widemul(Q.Q - a[i], b[i]) + res[i], Q)
     end
 end
 
-Bmulsub_to!(res::AbstractVector{UInt64}, a::AbstractVector{UInt64}, b::AbstractVector{UInt64}, Q::Modulus) = begin
-    @inbounds for i = eachindex(a)
-        res[i] = Bred(widemul(Q.Q - a[i], b[i]) + res[i], Q)
-    end
-end
-
-Bmulsub_to!(res::AbstractVector{UInt64}, a::UInt64, b::AbstractVector{UInt64}, Q::Modulus) = begin
+_Bmulsub_to!(res::AbstractVector{UInt64}, a::UInt64, b::AbstractVector{UInt64}, Q::Modulus) = begin
+    @assert length(res) == length(b) "Length of res and a should be the same."
+    N = length(b)
     neg_a = Q.Q - a
-    @inbounds for i = eachindex(a)
-        res[i] = Bred(widemul(neg_a, b[i]) + res[i], Q)
+    @inbounds for i = 0:8:N-8
+        res[i+1] = _Bred(widemul(neg_a, b[i+1]) + res[i+1], Q)
+        res[i+2] = _Bred(widemul(neg_a, b[i+2]) + res[i+2], Q)
+        res[i+3] = _Bred(widemul(neg_a, b[i+3]) + res[i+3], Q)
+        res[i+4] = _Bred(widemul(neg_a, b[i+4]) + res[i+4], Q)
+        res[i+5] = _Bred(widemul(neg_a, b[i+5]) + res[i+5], Q)
+        res[i+6] = _Bred(widemul(neg_a, b[i+6]) + res[i+6], Q)
+        res[i+7] = _Bred(widemul(neg_a, b[i+7]) + res[i+7], Q)
+        res[i+8] = _Bred(widemul(neg_a, b[i+8]) + res[i+8], Q)
     end
-end
-
-Base.:sum(a::AbstractVector{UInt64}, Q::Modulus)::UInt64 = begin
-    res = zero(UInt64)
-    @inbounds for i = eachindex(a)
-        res = add(res, a[i], Q)
-    end
-    res
-end
-
-# Input is in Mform, output is in Mform.
-Base.:powermod(a::UInt64, p::Integer, Q::Modulus)::UInt64 = begin
-    @assert p ≥ 0
-    p == 0 && return Mform(1, Q)
-
-    t = prevpow(2, p)
-    r = Mform(1, Q)
-    while true
-        if p >= t
-            r = Mmul(r, a, Q)
-            p -= t
-        end
-        t >>>= 1
-        t <= 0 && break
-        r = Mmul(r, r, Q)
-    end
-    return r
-end
-
-function reduce!(a::AbstractVector{UInt64}, Q::Modulus)
-    @inbounds for i = eachindex(a)
-        a[i] = Bred(a[i], Q)
+    @inbounds for i = 8(N>>3)+1:N
+        res[i] = _Bred(widemul(neg_a, b[i]) + res[i], Q)
     end
 end
 
 const Moduli = AbstractVector{Modulus}
+
+Base.:prod(Q::Moduli) = begin
+    Qbig = BigInt(1)
+    @inbounds for i = eachindex(Q)
+        Qbig *= Q[i].Q
+    end
+    Qbig
+end
+
+Base.:log2(Q::Moduli) = begin
+    logQ = 0.0
+    @inbounds for i = eachindex(Q)
+        logQ += log2(Q[i].Q)
+    end
+    logQ
+end

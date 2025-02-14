@@ -1,8 +1,8 @@
 # Ciphertext Simulatable BFV
 
-This repository provides an implementation of "Ciphertext-Simulatable HE from BFV with Randomized Evaluation".
+This repository provides an implementation of "Ciphertext-Simulatable HE from BFV with Randomized Evaluation", based on HIENAA library (unreleased).
 
-Before you run the code, please make sure to install the following packages : ChaChaCiphers, Primes, MultiFloats, LinearAlgebra.
+Before you run the code, please make sure to install the following packages : ChaChaCiphers, Primes, Nemo, NormalForms, LinearAlgebra, DoubleFloats.
 To install them, you can open the REPL and type the following commands.
 
 <pre>
@@ -10,8 +10,10 @@ To install them, you can open the REPL and type the following commands.
 ]
 add ChaChaCiphers
 add Primes
-add MultiFloats
+add Nemo
+add NormalForms
 add LinearAlgebra
+add DoubleFloats
 </code>
 </pre>
 
@@ -19,6 +21,6 @@ To run the test code, type the following command in the terminal.
 
 <pre>
 <code>
-julia main.jl
+julia distance.jl
 </code>
 </pre>
